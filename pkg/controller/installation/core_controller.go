@@ -1142,6 +1142,33 @@ func (r *ReconcileInstallation) Reconcile(ctx context.Context, request reconcile
 		return reconcile.Result{}, err
 	}
 
+	switchingFromBPF := false
+	if !instance.Spec.BPFEnabled() && ((felixConfiguration.Spec.BPFEnabled != nil && *felixConfiguration.Spec.BPFEnabled) ||
+		instance.Status.SwitchingFromBPF == "progressing") {
+		// The user is migrating from the BPF dataplane to iptables/nftables.
+		// We need to rollout the daemonset with BPF volume so that
+		// felix cleans up the BPF state.
+		reqLogger.Info("Rolling out the daemonset with BPF volume to clean up BPF resources")
+		// We need to patch the felix configuration to disable BPF.
+		// This will ensure that the BPF resources are cleaned up.
+		_, err = utils.PatchFelixConfiguration(ctx, r.client, func(fc *crdv1.FelixConfiguration) (bool, error) {
+			// Set the BPFEnabled field to false.
+			err := setBPFEnabledOnFelixConfiguration(fc, false)
+			if err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+		if err != nil {
+			r.status.SetDegraded(operator.ResourceUpdateError, "Failed to patch FelixConfiguration to disable BPF", err, reqLogger)
+			return reconcile.Result{}, err
+		}
+		instance.Status.SwitchingFromBPF = "progressing"
+		if err = r.client.Status().Update(ctx, instance); err != nil {
+			return reconcile.Result{}, err
+		}
+		switchingFromBPF = true
+	}
 	// nodeReporterMetricsPort is a port used in Enterprise to host internal metrics.
 	// Operator is responsible for creating a service which maps to that port.
 	// Here, we'll check the default felixconfiguration to see if the user is specifying
@@ -1410,6 +1437,7 @@ func (r *ReconcileInstallation) Reconcile(ctx context.Context, request reconcile
 	// Build a configuration for rendering calico/node.
 	nodeCfg := render.NodeConfiguration{
 		GoldmaneRunning:               goldmaneRunning,
+		SwitchingFromBPF:              switchingFromBPF,
 		K8sServiceEp:                  k8sapi.Endpoint,
 		Installation:                  &instance.Spec,
 		IPPools:                       crdPoolsToOperator(currentPools.Items),
@@ -1586,6 +1614,14 @@ func (r *ReconcileInstallation) Reconcile(ctx context.Context, request reconcile
 	if err != nil {
 		r.status.SetDegraded(operator.ResourceUpdateError, "Error updating resource", err, reqLogger)
 		return reconcile.Result{}, err
+	}
+
+	// If we are migrating from BPF, we need to ensure the annotations are set on the FelixConfiguration.
+	if switchingFromBPF {
+		if err := r.setswitchingFromBPFToDone(ctx, instance); err != nil {
+			r.status.SetDegraded(operator.ResourceUpdateError, "Error updating resource", err, reqLogger)
+			return reconcile.Result{}, err
+		}
 	}
 
 	// We can clear the degraded state now since as far as we know everything is in order.
@@ -1879,6 +1915,26 @@ func (r *ReconcileInstallation) setDefaultsOnFelixConfiguration(ctx context.Cont
 	}
 
 	return updated, nil
+}
+
+func (r *ReconcileInstallation) setswitchingFromBPFToDone(ctx context.Context, install *operator.Installation) error {
+	// Wait for rollout to complete before setting the annotation.
+	ds := &appsv1.DaemonSet{}
+	err := r.client.Get(ctx, types.NamespacedName{Namespace: common.CalicoNamespace, Name: common.NodeDaemonSetName}, ds)
+	if err != nil {
+		return fmt.Errorf("error getting DaemonSet: %w", err)
+	}
+	// Check if the DaemonSet has the BPF volumes and is ready.
+	if !isRolloutCompleteWithBPFVolumes(ds) {
+		// The DaemonSet is not ready, so we cannot set the annotation.
+		return fmt.Errorf("daemonSet rollout not complete: %w", err)
+	}
+	install.Status.SwitchingFromBPF = "done"
+	// Update the Installation CR with the new status.
+	if err := r.client.Status().Update(ctx, install); err != nil {
+		return fmt.Errorf("error updating Installation status: %w", err)
+	}
+	return nil
 }
 
 // setBPFUpdatesOnFelixConfiguration will take the passed in fc and update any BPF properties needed

@@ -50,6 +50,7 @@ const (
 	BirdTemplatesConfigMapName = "bird-templates"
 	birdTemplateHashAnnotation = "hash.operator.tigera.io/bird-templates"
 	BPFOperatorAnnotation      = "operator.tigera.io/bpfEnabled"
+	SwitchFromBPFAnnotation    = "operator.tigera.io/switch-from-bpf"
 
 	nodeCniConfigAnnotation   = "hash.operator.tigera.io/cni-config"
 	bgpLayoutHashAnnotation   = "hash.operator.tigera.io/bgp-layout"
@@ -108,6 +109,7 @@ type NodeConfiguration struct {
 	NodeAppArmorProfile     string
 	BirdTemplates           map[string]string
 	NodeReporterMetricsPort int
+	SwitchingFromBPF        bool
 
 	// CanRemoveCNIFinalizer specifies whether CNI plugin is still needed during uninstall since the CNI plugin and
 	// associated RBAC resources are required for pod teardown to succeed. Setting this to true removes
@@ -916,8 +918,15 @@ func (c *nodeComponent) nodeDaemonset(cniCfgMap *corev1.ConfigMap) *appsv1.Daemo
 		initContainers = append(initContainers, c.flexVolumeContainer())
 	}
 
+	if c.cfg.SwitchingFromBPF {
+		annotations[SwitchFromBPFAnnotation] = "true"
+	} else {
+		// If we are not switching from BPF, then we can remove the annotation.
+		annotations[SwitchFromBPFAnnotation] = "false"
+	}
+
 	// Mount the bpf fs for enterprise as we use BPF for some EE features.
-	if c.cfg.Installation.BPFEnabled() || c.cfg.Installation.Variant == operatorv1.TigeraSecureEnterprise {
+	if c.cfg.Installation.BPFEnabled() || c.cfg.SwitchingFromBPF || c.cfg.Installation.Variant == operatorv1.TigeraSecureEnterprise {
 		initContainers = append(initContainers, c.bpfBootstrapInitContainer())
 	}
 
@@ -1051,7 +1060,7 @@ func (c *nodeComponent) nodeVolumes() []corev1.Volume {
 		)
 	}
 
-	if c.cfg.Installation.BPFEnabled() || c.cfg.Installation.Variant == operatorv1.TigeraSecureEnterprise {
+	if c.cfg.Installation.BPFEnabled() || c.cfg.SwitchingFromBPF || c.cfg.Installation.Variant == operatorv1.TigeraSecureEnterprise {
 		volumes = append(volumes,
 			// Volume for the containing directory so that the init container can mount the child bpf directory if needed.
 			corev1.Volume{Name: "sys-fs", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys/fs", Type: &dirOrCreate}}},
@@ -1216,7 +1225,8 @@ func (c *nodeComponent) bpfBootstrapInitContainer() corev1.Container {
 	}
 
 	command := []string{CalicoNodeObjectName, "-init"}
-	if !c.cfg.Installation.BPFEnabled() {
+	// If BPF is disabled and a fresh install, then skip the cgroup mount.
+	if !c.cfg.Installation.BPFEnabled() && !c.cfg.SwitchingFromBPF {
 		command = append(command, "-skip-cgroup")
 	}
 	return corev1.Container{
@@ -1322,7 +1332,7 @@ func (c *nodeComponent) nodeVolumeMounts() []corev1.VolumeMount {
 			corev1.VolumeMount{MountPath: "/var/lib/calico", Name: "var-lib-calico"},
 		)
 	}
-	if c.cfg.Installation.BPFEnabled() || c.cfg.Installation.Variant == operatorv1.TigeraSecureEnterprise {
+	if c.cfg.Installation.BPFEnabled() || c.cfg.SwitchingFromBPF || c.cfg.Installation.Variant == operatorv1.TigeraSecureEnterprise {
 		nodeVolumeMounts = append(nodeVolumeMounts, corev1.VolumeMount{MountPath: "/sys/fs/bpf", Name: BPFVolumeName})
 	}
 	if c.vppDataplaneEnabled() {

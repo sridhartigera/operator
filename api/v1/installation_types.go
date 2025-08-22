@@ -915,6 +915,10 @@ type InstallationStatus struct {
 	// version deployed.
 	CalicoVersion string `json:"calicoVersion,omitempty"`
 
+	//SwitchFromBPF shows whether the installation is switching from BPF to iptables/nftables.
+	// +optional
+	SwitchingFromBPF string `json:"switchFromBPF,omitempty"`
+
 	// Conditions represents the latest observed set of conditions for the component. A component may be one or more of
 	// Ready, Progressing, Degraded or other customer types.
 	// +optional

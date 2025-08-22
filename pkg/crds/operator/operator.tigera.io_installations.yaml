@@ -17743,6 +17743,11 @@ spec:
                     configured value, or based on Calico's native auto-detetion.
                   format: int32
                   type: integer
+                switchFromBPF:
+                  description:
+                    SwitchFromBPF shows whether the installation is switching
+                    from BPF to iptables/nftables.
+                  type: string
                 variant:
                   description:
                     Variant is the most recently observed installed variant

@@ -82,6 +82,19 @@ func isRolloutCompleteWithBPFVolumes(ds *appsv1.DaemonSet) bool {
 	return false
 }
 
+func setSwitchingFromBPFAnnotation(fc *crdv1.FelixConfiguration, value string) {
+	// Add an annotation matching the field value. This allows the operator to compare the annotation to the field
+	// when performing an update to determine if another entity has modified the value since the last write.
+	var fcAnnotations map[string]string
+	if fc.Annotations == nil {
+		fcAnnotations = make(map[string]string)
+	} else {
+		fcAnnotations = fc.Annotations
+	}
+	fcAnnotations[render.SwitchFromBPFAnnotation] = value
+	fc.SetAnnotations(fcAnnotations)
+}
+
 func setBPFEnabledOnFelixConfiguration(fc *crdv1.FelixConfiguration, bpfEnabled bool) error {
 	err := bpfValidateAnnotations(fc)
 	if err != nil {

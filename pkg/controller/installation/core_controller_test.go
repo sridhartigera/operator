@@ -948,6 +948,38 @@ var _ = Describe("Testing core-controller installation", func() {
 			})
 		})
 
+		/*
+			It("should render with ebpf-bootstrap init container when moving from BPF to IPTables", func() {
+				// Create the node daemonset.
+				//createNodeDaemonSet()
+
+				// Enable BPF.
+				network := operator.LinuxDataplaneBPF
+				cr.Spec.CalicoNetwork = &operator.CalicoNetworkSpec{LinuxDataplane: &network}
+				Expect(c.Create(ctx, cr)).NotTo(HaveOccurred())
+				_, err := r.Reconcile(ctx, reconcile.Request{})
+				Expect(err).ShouldNot(HaveOccurred())
+
+				// Disable BPF.
+				ipt := operator.LinuxDataplaneIptables
+				cr.Spec.CalicoNetwork.LinuxDataplane = &ipt
+				Expect(c.Update(ctx, cr)).NotTo(HaveOccurred())
+				_, err = r.Reconcile(ctx, reconcile.Request{})
+				Expect(err).ShouldNot(HaveOccurred())
+
+				ds := appsv1.DaemonSet{
+					TypeMeta: metav1.TypeMeta{Kind: "DaemonSet", APIVersion: "apps/v1"},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      common.NodeDaemonSetName,
+						Namespace: common.CalicoNamespace,
+					},
+				}
+				Expect(test.GetResource(c, &ds)).To(BeNil())
+				Expect(ds.Spec.Template.Spec.InitContainers).To(HaveLen(6))
+				bpfInit := test.GetContainer(ds.Spec.Template.Spec.InitContainers, "ebpf-bootstrap")
+				Expect(bpfInit).ToNot(BeNil())
+			})*/
+
 		It("should Reconcile with default config", func() {
 			Expect(c.Create(ctx, cr)).NotTo(HaveOccurred())
 			_, err := r.Reconcile(ctx, reconcile.Request{})
@@ -1000,7 +1032,7 @@ var _ = Describe("Testing core-controller installation", func() {
 			Expect(*fc.Spec.BPFHostConntrackBypass).To(BeFalse())
 		})
 
-		It("should set BPFEnabled to ture on FelixConfiguration if BPF is enabled on installation", func() {
+		It("should set BPFEnabled to true on FelixConfiguration if BPF is enabled on installation", func() {
 			createNodeDaemonSet()
 
 			network := operator.LinuxDataplaneBPF
@@ -1066,7 +1098,18 @@ var _ = Describe("Testing core-controller installation", func() {
 			Expect(c.Update(ctx, cr)).NotTo(HaveOccurred())
 			_, err = r.Reconcile(ctx, reconcile.Request{})
 			Expect(err).ShouldNot(HaveOccurred())
+			err = c.Get(ctx, types.NamespacedName{Name: "default"}, cr)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(cr.Status.SwitchingFromBPF).To(Equal("done"))
 
+			ds := &appsv1.DaemonSet{}
+			err = c.Get(ctx,
+				types.NamespacedName{Name: common.NodeDaemonSetName, Namespace: common.CalicoNamespace},
+				ds)
+			Expect(err).NotTo(HaveOccurred())
+			bpfInit := test.GetContainer(ds.Spec.Template.Spec.InitContainers, "ebpf-bootstrap")
+			Expect(bpfInit).ToNot(BeNil())
+			Expect(err).NotTo(HaveOccurred())
 			fc = &crdv1.FelixConfiguration{}
 			err = c.Get(ctx, types.NamespacedName{Name: "default"}, fc)
 			Expect(err).ShouldNot(HaveOccurred())
